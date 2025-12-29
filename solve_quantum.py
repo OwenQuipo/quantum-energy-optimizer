@@ -64,11 +64,21 @@ def _load_qiskit_components():
             ) from exc
 
 
+def _count_pauli_terms(Q: Sequence[Sequence[float]]) -> int:
+    """Estimate the number of ZZ + Z Pauli terms induced by the QUBO."""
+
+    num_vars = len(Q)
+    diag = sum(1 for i in range(num_vars) if Q[i][i] != 0)
+    offdiag = sum(1 for i in range(num_vars) for j in range(i + 1, num_vars) if Q[i][j] != 0)
+    return diag + offdiag
+
+
 def solve_qaoa(
     Q: Sequence[Sequence[float]],
     max_variables: int = 20,
     time_budget_s: float = 60.0,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    max_pauli_terms: Optional[int] = 120,
 ) -> Tuple[Sequence[int], float, Dict[str, int]]:
     """Solve the QUBO with QAOA, optionally skipping oversized instances.
 
@@ -87,6 +97,14 @@ def solve_qaoa(
     if num_vars > max_variables:
         raise ValueError(
             f"QAOA demo capped at {max_variables} variables; received {num_vars}."
+        )
+
+    pauli_terms = _count_pauli_terms(Q)
+    if max_pauli_terms is not None and pauli_terms > max_pauli_terms:
+        raise ValueError(
+            "QAOA skipped: the QUBO is too dense for the demo settings "
+            f"({pauli_terms} Pauli terms > limit {max_pauli_terms}). "
+            "Reduce the horizon/penalties or call solve_qaoa(..., max_pauli_terms=None) to force it."
         )
 
     reps, shots, maxiter = _workload_for_budget(num_vars, time_budget_s)
