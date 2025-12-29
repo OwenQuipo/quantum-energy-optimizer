@@ -26,7 +26,7 @@ Battery dispatch decisions are:
 - globally coupled in time
 - constraint-heavy
 
-This makes them a natural fit for **quantum optimization methods**, rather than
+This makes them a natural fit for quantum optimization methods, rather than
 continuous relaxations or heuristic rules.
 
 ## Repository structure
