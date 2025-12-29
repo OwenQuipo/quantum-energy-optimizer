@@ -27,6 +27,7 @@ def solve_simulated_annealing(
     seed: int = 7,
     progress_event: Optional["threading.Event"] = None,
     progress_reporter: Optional[Callable[[int, int], None]] = None,
+    progress_interval: Optional[int] = None,
 ) -> Tuple[List[int], float]:
     """Solve a QUBO with a lightweight simulated annealing routine.
 
@@ -64,5 +65,7 @@ def solve_simulated_annealing(
             if progress_reporter:
                 progress_reporter(step + 1, steps)
             progress_event.clear()
+        elif progress_reporter and progress_interval and (step + 1) % progress_interval == 0:
+            progress_reporter(step + 1, steps)
 
     return best, best_energy

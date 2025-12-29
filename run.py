@@ -5,7 +5,7 @@ import sys
 import threading
 import warnings
 from itertools import product
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from data import E_MAX, P_MAX, SOC_0, demand, price
 from qubo import build_qubo_hybrid, decode_solution, encode_schedule_to_binary
@@ -86,17 +86,33 @@ def enumerate_feasible_schedules(meta) -> Iterable[Tuple[List[float], int]]:
             yield list(choice), units_used
 
 
-def brute_force_optimal(Q, meta):
+def brute_force_optimal(
+    Q,
+    meta,
+    progress_event: Optional["threading.Event"] = None,
+    progress_reporter: Optional[Callable[[int, int], None]] = None,
+    progress_interval: Optional[int] = None,
+):
     """Enumerate every feasible schedule and return the QUBO optimum."""
 
     best_schedule: List[float] | None = None
     best_energy = float("inf")
-    for schedule, units in enumerate_feasible_schedules(meta):
+    total_candidates = 3 ** meta.T
+
+    for idx, (schedule, units) in enumerate(enumerate_feasible_schedules(meta), start=1):
         x = encode_schedule_to_binary(schedule, meta)
         energy = compute_qubo_energy(Q, x)
         if energy < best_energy:
             best_energy = energy
             best_schedule = schedule
+
+        if progress_event and progress_event.is_set():
+            if progress_reporter:
+                progress_reporter(idx, total_candidates)
+            progress_event.clear()
+        elif progress_reporter and progress_interval and idx % progress_interval == 0:
+            progress_reporter(idx, total_candidates)
+
     if best_schedule is None:
         raise RuntimeError("No feasible schedules found")
     return best_schedule, best_energy
@@ -151,19 +167,16 @@ def rolling_horizon(
     return executed
 
 
-def main(include_charge: bool = False, horizon: int | None = None):
-    Q, meta = build_qubo_hybrid(price, demand, SOC_0, E_MAX, P_MAX, include_charge=include_charge)
-
-    brute_schedule, brute_energy = brute_force_optimal(Q, meta)
-    greedy_schedule = greedy_baseline(meta)
-
-    # Annealing as a secondary heuristic (should be worse than brute force)
-    x_classical, _ = solve_simulated_annealing(Q)
+def main(include_charge: bool = False, horizon: int | None = None, max_bruteforce_hours: int = 10):
     progress_event = threading.Event()
 
-    def report_progress(current_step: int, total_steps: int) -> None:
-        percent = (current_step / total_steps) * 100
-        print(f"Progress: {percent:.1f}%")
+    def make_reporter(label: str):
+        def _report(current_step: int, total_steps: int) -> None:
+            total = max(total_steps, 1)
+            percent = (current_step / total) * 100
+            print(f"[{label}] {current_step}/{total_steps} ({percent:.1f}%)")
+
+        return _report
 
     def listen_for_enter() -> None:
         """Watch stdin for Enter presses and request a progress update."""
@@ -177,8 +190,29 @@ def main(include_charge: bool = False, horizon: int | None = None):
 
     print("Press Enter at any time to display the current progress...")
 
+    Q, meta = build_qubo_hybrid(price, demand, SOC_0, E_MAX, P_MAX, include_charge=include_charge)
+
+    if meta.T > max_bruteforce_hours:
+        brute_schedule = None
+        brute_energy = None
+        print(
+            f"Skipping brute-force search for T={meta.T} (> {max_bruteforce_hours}) to avoid long runtimes."
+        )
+    else:
+        brute_schedule, brute_energy = brute_force_optimal(
+            Q,
+            meta,
+            progress_event=progress_event,
+            progress_reporter=make_reporter("Brute force"),
+            progress_interval=5000,
+        )
+    greedy_schedule = greedy_baseline(meta)
+
     x_classical, _ = solve_simulated_annealing(
-        Q, progress_event=progress_event, progress_reporter=report_progress
+        Q,
+        progress_event=progress_event,
+        progress_reporter=make_reporter("Simulated annealing"),
+        progress_interval=500,
     )
     decoded_classical = decode_solution(x_classical, meta)
 
@@ -198,14 +232,18 @@ def main(include_charge: bool = False, horizon: int | None = None):
     def score(schedule: Sequence[float]):
         return evaluate_schedule(schedule, None, meta.demand_rate)
 
-    brute_score = score(brute_schedule)
+    if brute_schedule is not None:
+        brute_score = score(brute_schedule)
     greedy_score = score(greedy_schedule)
     classical_score = score(decoded_classical["discharge"])
 
-    print("Brute-force optimal schedule (ground truth):", brute_schedule)
-    print(
-        f"  Energy cost: ${brute_score['energy_cost']:.2f}, Demand charge: ${brute_score['demand_charge']:.2f}, Total: ${brute_score['total']:.2f}"
-    )
+    if brute_schedule is not None:
+        print("Brute-force optimal schedule (ground truth):", brute_schedule)
+        print(
+            f"  Energy cost: ${brute_score['energy_cost']:.2f}, Demand charge: ${brute_score['demand_charge']:.2f}, Total: ${brute_score['total']:.2f}"
+        )
+    else:
+        print("Brute-force search skipped; relying on greedy and annealing heuristics instead.")
 
     if quantum_failed:
         print("Quantum run skipped:", quantum_error)
@@ -226,11 +264,12 @@ def main(include_charge: bool = False, horizon: int | None = None):
         f"  Energy cost: ${classical_score['energy_cost']:.2f}, Demand charge: ${classical_score['demand_charge']:.2f}, Total: ${classical_score['total']:.2f}"
     )
 
-    print("Explainability (per hour):")
-    for entry in explain_schedule(brute_schedule):
-        print(
-            f"  Hour {entry['hour']}: level={entry['level_P']:.1f} kW, energy savings=${entry['marginal_energy_savings']:.2f}, peak relief={entry['marginal_peak_relief']:.1f} kW"
-        )
+    if brute_schedule is not None:
+        print("Explainability (per hour):")
+        for entry in explain_schedule(brute_schedule):
+            print(
+                f"  Hour {entry['hour']}: level={entry['level_P']:.1f} kW, energy savings=${entry['marginal_energy_savings']:.2f}, peak relief={entry['marginal_peak_relief']:.1f} kW"
+            )
 
     if horizon:
         rh_schedule = rolling_horizon(horizon, include_charge)
