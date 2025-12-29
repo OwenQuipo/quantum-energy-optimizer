@@ -46,6 +46,11 @@ def solve_simulated_annealing(
 
     T = temperature
     for step in range(steps):
+        if progress_event and progress_event.is_set():
+            if progress_reporter:
+                progress_reporter(step, steps)
+            progress_event.clear()
+
         idx = rng.randrange(n)
         candidate = list(current)
         candidate[idx] = 1 - candidate[idx]

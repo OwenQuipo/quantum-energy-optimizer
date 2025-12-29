@@ -100,6 +100,11 @@ def brute_force_optimal(
     total_candidates = 3 ** meta.T
 
     for idx, (schedule, units) in enumerate(enumerate_feasible_schedules(meta), start=1):
+        if progress_event and progress_event.is_set():
+            if progress_reporter:
+                progress_reporter(idx - 1, total_candidates)
+            progress_event.clear()
+
         x = encode_schedule_to_binary(schedule, meta)
         energy = compute_qubo_energy(Q, x)
         if energy < best_energy:
@@ -174,7 +179,7 @@ def main(include_charge: bool = False, horizon: int | None = None, max_bruteforc
         def _report(current_step: int, total_steps: int) -> None:
             total = max(total_steps, 1)
             percent = (current_step / total) * 100
-            print(f"[{label}] {current_step}/{total_steps} ({percent:.1f}%)")
+            print(f"[{label}] {current_step}/{total_steps} ({percent:.1f}%)", flush=True)
 
         return _report
 
