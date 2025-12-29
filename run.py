@@ -226,13 +226,14 @@ def main(include_charge: bool = False, horizon: int | None = None, max_bruteforc
             raise ValueError(
                 f"QAOA demo capped at 20 variables; received {meta.num_variables}."
             )
-        x_quantum, _ = solve_qaoa(Q)
+        x_quantum, _, qaoa_config = solve_qaoa(Q, time_budget_s=60.0)
         decoded_quantum = decode_solution(x_quantum, meta)
         quantum_failed = False
     except ValueError as exc:
         decoded_quantum = None
         quantum_failed = True
         quantum_error = str(exc)
+        qaoa_config = None
 
     def score(schedule: Sequence[float]):
         return evaluate_schedule(schedule, None, meta.demand_rate)
@@ -258,6 +259,10 @@ def main(include_charge: bool = False, horizon: int | None = None, max_bruteforc
         print(
             f"  Energy cost: ${quant_score['energy_cost']:.2f}, Demand charge: ${quant_score['demand_charge']:.2f}, Total: ${quant_score['total']:.2f}"
         )
+        if qaoa_config:
+            print(
+                f"  QAOA workload: reps={qaoa_config['reps']}, shots={qaoa_config['shots']}, maxiter={qaoa_config['maxiter']} (targeting ~1 minute)"
+            )
 
     print("Greedy baseline schedule:", greedy_schedule)
     print(
