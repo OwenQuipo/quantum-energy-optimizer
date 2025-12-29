@@ -18,7 +18,7 @@ def solve_qaoa(Q: Sequence[Sequence[float]], max_variables: int = 20):
         from qiskit_algorithms.optimizers import COBYLA
         from qiskit_optimization import QuadraticProgram
         from qiskit_optimization.algorithms import MinimumEigenOptimizer
-        from qiskit.primitives import StatevectorSampler as Sampler
+        from qiskit.primitives import Sampler
     except ImportError:
         raise ValueError("Qiskit not installed; skipping quantum solve")
 
@@ -43,7 +43,8 @@ def solve_qaoa(Q: Sequence[Sequence[float]], max_variables: int = 20):
 
     qp.minimize(linear=linear, quadratic=quadratic)
 
-    qaoa = QAOA(sampler=Sampler(), optimizer=COBYLA(), reps=1)
+    # Use a shot-based sampler and cap optimizer iterations to keep runtime small.
+    qaoa = QAOA(sampler=Sampler(shots=128), optimizer=COBYLA(maxiter=50), reps=1)
     optimizer = MinimumEigenOptimizer(qaoa)
 
     result = optimizer.solve(qp)
