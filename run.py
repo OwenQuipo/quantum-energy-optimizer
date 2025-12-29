@@ -1,6 +1,8 @@
 # run.py
 from __future__ import annotations
 
+import sys
+import threading
 import warnings
 from itertools import product
 from typing import Dict, Iterable, List, Sequence, Tuple
@@ -157,6 +159,27 @@ def main(include_charge: bool = False, horizon: int | None = None):
 
     # Annealing as a secondary heuristic (should be worse than brute force)
     x_classical, _ = solve_simulated_annealing(Q)
+    progress_event = threading.Event()
+
+    def report_progress(current_step: int, total_steps: int) -> None:
+        percent = (current_step / total_steps) * 100
+        print(f"Progress: {percent:.1f}%")
+
+    def listen_for_enter() -> None:
+        """Watch stdin for Enter presses and request a progress update."""
+
+        for line in sys.stdin:
+            if line.strip() == "":
+                progress_event.set()
+
+    listener = threading.Thread(target=listen_for_enter, daemon=True)
+    listener.start()
+
+    print("Press Enter at any time to display the current progress...")
+
+    x_classical, _ = solve_simulated_annealing(
+        Q, progress_event=progress_event, progress_reporter=report_progress
+    )
     decoded_classical = decode_solution(x_classical, meta)
 
     try:

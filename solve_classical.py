@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 import random
-from typing import List, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 
 def compute_qubo_energy(Q: Sequence[Sequence[float]], x: Sequence[int]) -> float:
@@ -25,6 +25,8 @@ def solve_simulated_annealing(
     temperature: float = 1.0,
     cooling: float = 0.995,
     seed: int = 7,
+    progress_event: Optional["threading.Event"] = None,
+    progress_reporter: Optional[Callable[[int, int], None]] = None,
 ) -> Tuple[List[int], float]:
     """Solve a QUBO with a lightweight simulated annealing routine.
 
@@ -42,7 +44,7 @@ def solve_simulated_annealing(
     best_energy = current_energy
 
     T = temperature
-    for _ in range(steps):
+    for step in range(steps):
         idx = rng.randrange(n)
         candidate = list(current)
         candidate[idx] = 1 - candidate[idx]
@@ -57,5 +59,10 @@ def solve_simulated_annealing(
                 best_energy = candidate_energy
 
         T *= cooling
+
+        if progress_event and progress_event.is_set():
+            if progress_reporter:
+                progress_reporter(step + 1, steps)
+            progress_event.clear()
 
     return best, best_energy
