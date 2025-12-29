@@ -14,6 +14,17 @@ from solve_quantum import solve_qaoa
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
+# SciPy emits ``SparseEfficiencyWarning`` from deep inside the QAOA stack when it
+# implicitly converts matrices to CSC format. This is harmless for this demo but
+# very noisy, so we silence just that warning category if SciPy is available.
+try:  # pragma: no cover - optional dependency handling
+    from scipy.sparse import SparseEfficiencyWarning  # type: ignore[import]
+except Exception:  # SciPy not installed or incompatible
+    SparseEfficiencyWarning = None  # type: ignore[assignment]
+
+if SparseEfficiencyWarning is not None:
+    warnings.filterwarnings("ignore", category=SparseEfficiencyWarning)
+
 
 def dot(a: Sequence[float], b: Sequence[float]) -> float:
     return float(sum(x * y for x, y in zip(a, b)))
@@ -176,10 +187,20 @@ def main(include_charge: bool = False, horizon: int | None = None, max_bruteforc
     progress_event = threading.Event()
 
     def make_reporter(label: str):
+        """Return a clean in-place progress bar printer; minimal clutter."""
+
+        bar_width = 20
+
         def _report(current_step: int, total_steps: int) -> None:
-            total = max(total_steps, 1)
-            percent = (current_step / total) * 100
-            print(f"[{label}] {current_step}/{total_steps} ({percent:.1f}%)", flush=True)
+            total = max(int(total_steps), 1)
+            current = min(max(int(current_step), 0), total)
+            fraction = current / total
+            filled = int(bar_width * fraction)
+            bar = "█" * filled + " " * (bar_width - filled)
+            msg = f"\r{label}: |{bar}| {fraction*100:4.1f}%"
+            print(msg, end="", flush=True)
+            if current >= total:
+                print()
 
         return _report
 
@@ -192,8 +213,6 @@ def main(include_charge: bool = False, horizon: int | None = None, max_bruteforc
 
     listener = threading.Thread(target=listen_for_enter, daemon=True)
     listener.start()
-
-    print("Press Enter at any time to display the current progress...")
 
     Q, meta = build_qubo_hybrid(price, demand, SOC_0, E_MAX, P_MAX, include_charge=include_charge)
 
@@ -226,7 +245,11 @@ def main(include_charge: bool = False, horizon: int | None = None, max_bruteforc
             raise ValueError(
                 f"QAOA demo capped at 20 variables; received {meta.num_variables}."
             )
-        x_quantum, _, qaoa_config = solve_qaoa(Q, time_budget_s=60.0)
+        x_quantum, _, qaoa_config = solve_qaoa(
+            Q,
+            time_budget_s=10.0,
+            progress_callback=make_reporter("QAOA"),
+        )
         decoded_quantum = decode_solution(x_quantum, meta)
         quantum_failed = False
     except ValueError as exc:

@@ -3,23 +3,20 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Dict, Sequence, Tuple
+from typing import Callable, Dict, Optional, Sequence, Tuple
 
 
 def _workload_for_budget(num_vars: int, time_budget_s: float) -> Tuple[int, int, int]:
-    """Heuristic QAOA settings that stay under ~1 minute but do real work."""
+    """Heuristic QAOA settings tuned for fast demo iterations (typically 10s budget)."""
 
-    heavy_budget = time_budget_s >= 45.0
-    reps = 2 if num_vars <= 20 and heavy_budget else 1
-    shots = 1024 if heavy_budget else 512
-    maxiter = 150 if heavy_budget else 90
+    # For the small demo (8-18 variables), keep reps=1 and ultra-low shots/iterations.
+    reps = 1
+    shots = 64  # Very small number of shots for quick feedback
+    maxiter = 12  # Light optimizer iterations
 
-    if time_budget_s < 30.0:
-        shots = min(shots, 512)
-        maxiter = min(maxiter, 70)
-
-    # Tie max iterations to the wall-clock budget to avoid runaway solves.
-    maxiter = max(25, int(min(maxiter, time_budget_s * 3.0)))
+    # Tie max iterations to the wall-clock budget but keep it reasonably bounded.
+    # For a 10s budget, this gives us ~30-60 iterations depending on circuit size.
+    maxiter = max(6, int(min(maxiter, time_budget_s * 1.2)))
 
     return reps, shots, maxiter
 
@@ -35,15 +32,22 @@ def _maybe_extend_sys_path_from_local_venv() -> None:
 
 
 def _load_qiskit_components():
-    """Import Qiskit pieces, retrying with a local venv path if needed."""
+    """Import Qiskit pieces, retrying with a local venv path if needed.
+
+    This helper is intentionally thin so it can adapt to breaking changes in
+    Qiskit without touching the rest of the code. For Qiskit 2.x the
+    ``qiskit.primitives.Sampler`` class was removed in favour of the V2
+    primitives such as :class:`StatevectorSampler`, which implement the
+    ``BaseSamplerV2`` interface expected by ``qiskit_algorithms.QAOA``.
+    """
 
     try:
         from qiskit_algorithms import QAOA
         from qiskit_algorithms.optimizers import COBYLA
         from qiskit_optimization import QuadraticProgram
         from qiskit_optimization.algorithms import MinimumEigenOptimizer
-        from qiskit.primitives import Sampler
-        return QAOA, COBYLA, QuadraticProgram, MinimumEigenOptimizer, Sampler
+        from qiskit.primitives import StatevectorSampler
+        return QAOA, COBYLA, QuadraticProgram, MinimumEigenOptimizer, StatevectorSampler
     except ImportError:
         _maybe_extend_sys_path_from_local_venv()
         try:
@@ -51,8 +55,8 @@ def _load_qiskit_components():
             from qiskit_algorithms.optimizers import COBYLA
             from qiskit_optimization import QuadraticProgram
             from qiskit_optimization.algorithms import MinimumEigenOptimizer
-            from qiskit.primitives import Sampler
-            return QAOA, COBYLA, QuadraticProgram, MinimumEigenOptimizer, Sampler
+            from qiskit.primitives import StatevectorSampler
+            return QAOA, COBYLA, QuadraticProgram, MinimumEigenOptimizer, StatevectorSampler
         except ImportError as exc:
             raise ValueError(
                 "Qiskit not available for the current interpreter "
@@ -61,7 +65,10 @@ def _load_qiskit_components():
 
 
 def solve_qaoa(
-    Q: Sequence[Sequence[float]], max_variables: int = 20, time_budget_s: float = 60.0
+    Q: Sequence[Sequence[float]],
+    max_variables: int = 20,
+    time_budget_s: float = 60.0,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> Tuple[Sequence[int], float, Dict[str, int]]:
     """Solve the QUBO with QAOA, optionally skipping oversized instances.
 
@@ -72,7 +79,7 @@ def solve_qaoa(
     maximize work within the provided time budget.
     """
 
-    QAOA, COBYLA, QuadraticProgram, MinimumEigenOptimizer, Sampler = _load_qiskit_components()
+    QAOA, COBYLA, QuadraticProgram, MinimumEigenOptimizer, StatevectorSampler = _load_qiskit_components()
 
     num_vars = len(Q)
     if any(len(row) != num_vars for row in Q):
@@ -83,6 +90,18 @@ def solve_qaoa(
         )
 
     reps, shots, maxiter = _workload_for_budget(num_vars, time_budget_s)
+
+    # Bridge QAOA's callback API (eval_count, params, value, metadata) to the
+    # simple two-argument ``progress_callback(current_step, total_steps)``
+    # expected by the runner.
+    def _qaoa_callback(eval_count, _params, _mean, _metadata):
+        if progress_callback is None:
+            return
+        try:
+            current = int(eval_count)
+        except (TypeError, ValueError):
+            current = 0
+        progress_callback(min(current, maxiter), maxiter)
 
     qp = QuadraticProgram()
 
@@ -99,8 +118,16 @@ def solve_qaoa(
 
     qp.minimize(linear=linear, quadratic=quadratic)
 
-    # Use a shot-based sampler and cap optimizer iterations to keep runtime small.
-    qaoa = QAOA(sampler=Sampler(shots=shots), optimizer=COBYLA(maxiter=maxiter), reps=reps)
+    # Use a statevector-based sampler (V2 primitives) and cap optimizer iterations
+    # to keep runtime small. ``default_shots`` controls the sampling resolution
+    # used internally by QAOA.
+    sampler = StatevectorSampler(default_shots=shots)
+    qaoa = QAOA(
+        sampler=sampler,
+        optimizer=COBYLA(maxiter=maxiter),
+        reps=reps,
+        callback=_qaoa_callback if progress_callback is not None else None,
+    )
     optimizer = MinimumEigenOptimizer(qaoa)
 
     result = optimizer.solve(qp)
