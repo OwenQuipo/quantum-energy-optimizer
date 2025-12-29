@@ -33,14 +33,25 @@ continuous relaxations or heuristic rules.
 #### quantum-battery/
 #### data.py # Hardcoded example scenario
 #### qubo.py # QUBO construction (quantum-native core)
-#### solve_classical.py # Brute-force solver for verification
-#### solve_quantum.py # QAOA-based solver using Qiskit
+#### solve_classical.py # Classical simulated annealing solver for QUBOs
+#### solve_quantum.py # QAOA-based solver using Qiskit (optional)
 #### run.py # Entry point
 #### README.md
 
 ## Status
-- v0.1: working quantum + classical agreement on small horizons
-- Next: demand charges, longer horizons, rolling optimization
+- v0.2: explicit demand-charge modeling with a peak variable
+- Next: longer horizons and rolling optimization
+
+## Running the demo
+The classical path has **no third-party dependencies**; invoke it directly:
+
+```
+python run.py
+```
+
+If Qiskit is installed, a QAOA run will be attempted as well. Otherwise the
+quantum step is skipped with a clear message while the classical result is
+still produced.
 
 This is an early research-driven prototype.
 
